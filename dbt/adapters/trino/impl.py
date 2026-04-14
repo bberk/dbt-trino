@@ -25,6 +25,7 @@ from dbt.adapters.trino import (
     parse_model,
 )
 from dbt.adapters.trino.catalogs import TrinoCatalogIntegration
+from dbt.adapters.trino.starburst.catalog_sync import StarburstCatalogSync
 
 
 @dataclass
@@ -67,6 +68,7 @@ class TrinoAdapter(SQLAdapter):
         super().__init__(config, mp_context)
         self.connections = self.ConnectionManager(config, mp_context, self.behavior)
         self.add_catalog_integration(constants.DEFAULT_TRINO_CATALOG)
+        self._starburst_sync: Optional[StarburstCatalogSync] = None
 
     @property
     def _behavior_flags(self) -> List[BehaviorFlag]:
@@ -119,6 +121,34 @@ class TrinoAdapter(SQLAdapter):
 
     def valid_incremental_strategies(self):
         return ["append", "merge", "delete+insert", "microbatch"]
+
+    @available
+    def persist_starburst_docs(self, relation, model_dict, for_relation=True, for_columns=True):
+        """Sync model/column descriptions to Starburst Data Discovery API."""
+        credentials = self.connections.get_thread_connection().credentials
+        if not getattr(credentials, "starburst_url", None):
+            return
+
+        if self._starburst_sync is None:
+            self._starburst_sync = StarburstCatalogSync(credentials)
+
+        catalog_name = relation.database
+        schema_name = relation.schema
+        table_name = relation.identifier
+
+        if for_relation:
+            description = model_dict.get("description", "")
+            if description:
+                self._starburst_sync.sync_relation_description(
+                    catalog_name, schema_name, table_name, description
+                )
+
+        if for_columns:
+            columns = model_dict.get("columns", {})
+            if columns:
+                self._starburst_sync.sync_column_descriptions(
+                    catalog_name, schema_name, table_name, columns
+                )
 
     @available
     def build_catalog_relation(self, model: RelationConfig) -> Optional[CatalogRelation]:
