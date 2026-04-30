@@ -1,4 +1,5 @@
 import requests
+import threading
 from dbt.adapters.events.logging import AdapterLogger
 from dbt_common.exceptions import DbtRuntimeError
 
@@ -26,22 +27,25 @@ class StarburstCatalogSync:
             or DEFAULT_MAX_COLUMN_DESCRIPTIONS_PER_REQUEST
         )
         self._client: StarburstDiscoveryClient | None = None
+        self._client_lock = threading.Lock()
 
     @property
     def client(self) -> StarburstDiscoveryClient | None:
         if self._client is None:
-            if not self._client_id or not self._secret_key:
-                logger.warning(
-                    "Starburst description sync requires starburst_client_id and "
-                    "starburst_secret_key in the profile. Skipping Starburst sync."
-                )
-                return None
-            self._client = StarburstDiscoveryClient(
-                starburst_url=self._starburst_url,
-                client_id=self._client_id,
-                secret_key=self._secret_key,
-                max_column_batch_size=self._max_column_batch_size,
-            )
+            with self._client_lock:
+                if self._client is None:
+                    if not self._client_id or not self._secret_key:
+                        logger.warning(
+                            "Starburst description sync requires starburst_client_id and "
+                            "starburst_secret_key in the profile. Skipping Starburst sync."
+                        )
+                        return None
+                    self._client = StarburstDiscoveryClient(
+                        starburst_url=self._starburst_url,
+                        client_id=self._client_id,
+                        secret_key=self._secret_key,
+                        max_column_batch_size=self._max_column_batch_size,
+                    )
         return self._client
 
     def _handle_failure(self, message: str, error: Exception) -> None:

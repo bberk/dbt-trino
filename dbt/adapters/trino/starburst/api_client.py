@@ -1,3 +1,4 @@
+import threading
 import time
 
 import requests
@@ -12,6 +13,49 @@ TOKEN_EXPIRY_BUFFER_SECONDS = 60
 # Default column descriptions the batch endpoint accepts per request.
 DEFAULT_MAX_COLUMN_DESCRIPTIONS_PER_REQUEST = 100
 CLIENT_INFO_HEADER = "X-Client-Info"
+
+
+class _AdaptiveRateLimiter:
+    """AIMD rate limiter shared across all threads.
+
+    Additive increase on success, multiplicative decrease on 429, so the
+    allowed throughput self-tunes to stay just under the Galaxy API limit
+    without needing a hard-coded value.
+    """
+
+    def __init__(self, initial_rate: float = 10.0, min_rate: float = 0.5):
+        self._rate = initial_rate
+        self._min_rate = min_rate
+        self._tokens = initial_rate
+        self._last = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._tokens = min(
+                    self._rate,
+                    self._tokens + (now - self._last) * self._rate,
+                )
+                self._last = now
+                if self._tokens >= 1:
+                    self._tokens -= 1
+                    return
+                wait = (1 - self._tokens) / self._rate
+            time.sleep(wait)
+
+    def on_success(self) -> None:
+        with self._lock:
+            self._rate += 0.1
+
+    def on_rate_limited(self, retry_after: float | None = None) -> None:
+        with self._lock:
+            if retry_after and retry_after > 0:
+                self._rate = max(self._min_rate, (1.0 / retry_after) * 0.8)
+            else:
+                self._rate = max(self._min_rate, self._rate * 0.5)
+            self._tokens = min(self._tokens, self._rate)
 
 
 def _extract_results(data) -> list:
@@ -45,6 +89,9 @@ def _chunked(items: list, size: int):
 
 
 class StarburstDiscoveryClient:
+    _rate_limiter = _AdaptiveRateLimiter()
+    _catalog_ids_lock = threading.Lock()
+
     def __init__(
         self,
         starburst_url: str,
@@ -91,14 +138,23 @@ class StarburstDiscoveryClient:
 
         Raises requests.RequestException on failure.
         """
+        StarburstDiscoveryClient._rate_limiter.acquire()
         self._ensure_token()
         url = f"{self.base_url}{path}"
         kwargs: dict[str, int | dict] = {"timeout": STARBURST_API_TIMEOUT}
         if body is not None:
             kwargs["json"] = body
         response = getattr(self._session, method)(url, **kwargs)
+        if response.status_code == 429:
+            retry_after_raw = response.headers.get("Retry-After")
+            retry_after = float(retry_after_raw) if retry_after_raw else None
+            StarburstDiscoveryClient._rate_limiter.on_rate_limited(retry_after)
+            time.sleep(retry_after or 5.0)
+            response.raise_for_status()
         response.raise_for_status()
         logger.debug(f"Starburst {method.upper()} {path} status: {response.status_code}")
+        StarburstDiscoveryClient._rate_limiter.on_success()
+
         # Write endpoints (e.g. the batch column update) return 204 No Content
         # with an empty body; there is nothing to parse in that case.
         if response.status_code == 204 or not response.content:
@@ -118,9 +174,14 @@ class StarburstDiscoveryClient:
     # -- Catalog ID resolution --
 
     def _get_catalog_id(self, catalog_name: str) -> str | None:
-        if catalog_name not in self._catalog_ids:
-            self._catalog_ids[catalog_name] = self._resolve_catalog_id(catalog_name)
-        return self._catalog_ids[catalog_name]
+        with StarburstDiscoveryClient._catalog_ids_lock:
+            if catalog_name not in self._catalog_ids:
+                # Resolve while holding the lock so concurrent threads wait for
+                # the result rather than making duplicate API calls. Safe because
+                # _rate_limiter.acquire() sleeps outside its own lock and does not
+                # interact with _catalog_ids_lock.
+                self._catalog_ids[catalog_name] = self._resolve_catalog_id(catalog_name)
+            return self._catalog_ids[catalog_name]
 
     def _resolve_catalog_id(self, catalog_name: str) -> str | None:
         try:

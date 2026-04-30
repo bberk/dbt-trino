@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -63,6 +64,8 @@ class TrinoAdapter(SQLAdapter):
             Capability.MicrobatchConcurrency: CapabilitySupport(support=Support.Full),
         }
     )
+
+    _starburst_sync_lock = threading.Lock()
 
     def __init__(self, config, mp_context) -> None:
         super().__init__(config, mp_context)
@@ -130,7 +133,9 @@ class TrinoAdapter(SQLAdapter):
             return
 
         if self._starburst_sync is None:
-            self._starburst_sync = StarburstCatalogSync(credentials)
+            with TrinoAdapter._starburst_sync_lock:
+                if self._starburst_sync is None:
+                    self._starburst_sync = StarburstCatalogSync(credentials)
 
         catalog_name = relation.database
         schema_name = relation.schema
