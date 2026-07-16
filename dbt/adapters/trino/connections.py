@@ -29,6 +29,29 @@ class HttpScheme(Enum):
     HTTPS = "https"
 
 
+def with_starburst_fields(cls):
+    """Add the shared Starburst metadata-sync credential fields to a dataclass.
+
+    The fields are appended after the class's own fields so they never precede a
+    required field, keeping this compatible with Python 3.9 where dataclass
+    ``kw_only`` is unavailable.
+    """
+    cls.__annotations__ = {
+        **cls.__dict__.get("__annotations__", {}),
+        "starburst_url": Optional[str],
+        "starburst_client_id": Optional[str],
+        "starburst_secret_key": Optional[str],
+        "starburst_metadata_failure_strategy": Optional[str],
+        "starburst_max_column_batch_size": Optional[int],
+    }
+    cls.starburst_url = None
+    cls.starburst_client_id = None
+    cls.starburst_secret_key = None
+    cls.starburst_metadata_failure_strategy = "continue_on_error"
+    cls.starburst_max_column_batch_size = 100
+    return dataclass(cls)
+
+
 class TrinoCredentialsFactory:
     @classmethod
     def _create_trino_profile(cls, profile):
@@ -87,6 +110,9 @@ class TrinoCredentials(Credentials, metaclass=ABCMeta):
             "schema",
             "cert",
             "prepared_statements_enabled",
+            "starburst_url",
+            "starburst_metadata_failure_strategy",
+            "starburst_max_column_batch_size",
         )
 
     @abstractmethod
@@ -94,7 +120,7 @@ class TrinoCredentials(Credentials, metaclass=ABCMeta):
         pass
 
 
-@dataclass
+@with_starburst_fields
 class TrinoNoneCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -118,7 +144,7 @@ class TrinoNoneCredentials(TrinoCredentials):
         return trino.constants.DEFAULT_AUTH
 
 
-@dataclass
+@with_starburst_fields
 class TrinoCertificateCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -149,7 +175,7 @@ class TrinoCertificateCredentials(TrinoCredentials):
         )
 
 
-@dataclass
+@with_starburst_fields
 class TrinoLdapCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -178,7 +204,7 @@ class TrinoLdapCredentials(TrinoCredentials):
         return trino.auth.BasicAuthentication(username=self.user, password=self.password)
 
 
-@dataclass
+@with_starburst_fields
 class TrinoKerberosCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -235,7 +261,7 @@ _GSSAPI_MUTUAL_AUTH_VALUES = {
 }
 
 
-@dataclass
+@with_starburst_fields
 class TrinoGssapiCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -292,7 +318,7 @@ class TrinoGssapiCredentials(TrinoCredentials):
             )
 
 
-@dataclass
+@with_starburst_fields
 class TrinoJwtCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -320,7 +346,7 @@ class TrinoJwtCredentials(TrinoCredentials):
         return trino.auth.JWTAuthentication(self.jwt_token)
 
 
-@dataclass
+@with_starburst_fields
 class TrinoOauthCredentials(TrinoCredentials):
     host: str
     port: Port
@@ -350,7 +376,7 @@ class TrinoOauthCredentials(TrinoCredentials):
         return self.OAUTH
 
 
-@dataclass
+@with_starburst_fields
 class TrinoOauthConsoleCredentials(TrinoCredentials):
     host: str
     port: Port

@@ -35,6 +35,7 @@
   {% do on_table_exists_logic(on_table_exists, existing_relation, intermediate_relation, backup_relation, target_relation) %}
 
   {% do persist_docs(target_relation, model) %}
+  {% do persist_starburst_docs(target_relation, model) %}
 
   {% set should_revoke = should_revoke(existing_relation, full_refresh_mode=True) %}
   {% do apply_grants(target_relation, grant_config, should_revoke=should_revoke) %}
