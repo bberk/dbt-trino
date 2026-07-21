@@ -114,6 +114,7 @@
   {% do apply_grants(target_relation, grant_config, should_revoke=should_revoke) %}
 
   {% do persist_docs(target_relation, model) %}
+  {% do persist_starburst_docs(target_relation, model) %}
 
   {{ return({'relations': [target_relation]}) }}
 

@@ -3,6 +3,7 @@
     {% set target_relation = this.incorporate(type='view') %}
 
     {% do persist_docs(target_relation, model) %}
+    {% do persist_starburst_docs(target_relation, model) %}
 
     {% do return(to_return) %}
 {%- endmaterialization %}
